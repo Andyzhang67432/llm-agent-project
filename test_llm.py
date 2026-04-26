@@ -2,30 +2,39 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import csv
 
-# Name of the local language model to load
 model_name = "microsoft/phi-2"
 
 print("Loading model...")
 
-# The tokenizer converts text into tokens that the model can read
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-# The model generates output based on the input prompt
 model = AutoModelForCausalLM.from_pretrained(model_name)
 
-# Use GPU if available; otherwise fall back to CPU
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("Using device:", device)
 
-# Move the model to the selected device
 model.to(device)
 
 
+def parse_response(response_text):
+    category = ""
+    summary = ""
+    action = ""
+
+    lines = response_text.split("\n")
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Category:"):
+            category = line.replace("Category:", "").strip()
+        elif line.startswith("Summary:"):
+            summary = line.replace("Summary:", "").strip()
+        elif line.startswith("Action:"):
+            action = line.replace("Action:", "").strip()
+
+    return category, summary, action
+
+
 def analyze_complaint(complaint_text):
-    # The prompt gives the model clear instructions:
-    # 1. what categories are allowed
-    # 2. what each category means
-    # 3. what output format to follow
     prompt = f"""You are a customer support assistant.
 
 Classify the complaint into exactly one of these categories:
@@ -52,30 +61,29 @@ Complaint:
 Result:
 """
 
-    # Convert the prompt into PyTorch tensors and move them to the same device
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
-    # Generate the model's response
     outputs = model.generate(
         **inputs,
-        max_new_tokens=120,                 # Maximum number of new tokens to generate
-        do_sample=False,                    # Disable sampling for more stable output
+        max_new_tokens=120,
+        do_sample=False,
         pad_token_id=tokenizer.eos_token_id
     )
 
-    # The output includes both the original prompt and the newly generated text
-    # Keep only the newly generated portion
     generated_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+    result = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
-    # Decode tokens back into readable text
-    result = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+    category, summary, action = parse_response(result)
 
-    # Remove extra whitespace at the beginning and end
-    return result.strip()
+    return {
+        "raw_response": result,
+        "category": category,
+        "summary": summary,
+        "action": action
+    }
 
 
 if __name__ == "__main__":
-    # Example complaints to test
     complaints = [
         """I ordered a phone last week, but it still hasn't arrived.
 The tracking page hasn't updated for days and customer support is not responding.""",
@@ -84,34 +92,45 @@ The tracking page hasn't updated for days and customer support is not responding
 I want a replacement or refund.""",
 
         """I contacted support three times about my account problem, but nobody has replied clearly.
-The responses were slow and not helpful."""
+The responses were slow and not helpful.""",
+
+        """I was charged twice for the same order and still have not received my refund.""",
+
+        """My package was marked as delivered, but I never received it.""",
+
+        """The headphones stopped working after one day and the left side has no sound."""
     ]
 
-    # Store all results here before saving them
     results = []
 
-    # Process each complaint one by one
     for i, complaint in enumerate(complaints, start=1):
         output = analyze_complaint(complaint)
 
-        # Print the complaint and the model's response to the terminal
         print(f"\n=== Complaint {i} ===\n")
         print("Complaint:")
         print(complaint)
-        print("\nResponse:")
-        print(output)
+        print("\nCategory:")
+        print(output["category"])
+        print("\nSummary:")
+        print(output["summary"])
+        print("\nAction:")
+        print(output["action"])
 
-        # Save the result as a dictionary
         results.append({
             "id": i,
             "complaint": complaint,
-            "response": output
+            "category": output["category"],
+            "summary": output["summary"],
+            "action": output["action"],
+            "raw_response": output["raw_response"]
         })
 
-    # Write all results to a CSV file
-    with open("complaint_results.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["id", "complaint", "response"])
+    with open("complaint_results_structured.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["id", "complaint", "category", "summary", "action", "raw_response"]
+        )
         writer.writeheader()
         writer.writerows(results)
 
-    print("\nSaved results to complaint_results.csv")
+    print("\nSaved results to complaint_results_structured.csv")
